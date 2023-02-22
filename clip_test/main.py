@@ -1,21 +1,69 @@
+import logging
 from pathlib import Path
+from typing import List
 
 from clip_interrogator import Config, Interrogator
 from PIL import Image
 
-IMG_DIR = Path(__file__).parents[1] / 'data' / 'imgs'
+logging.basicConfig(format='%(name)s-%(levelname)s|%(lineno)d:  %(message)s', level=logging.INFO)
+log = logging.getLogger(__name__)
 
-assert IMG_DIR.is_dir()
+import contextlib
+import os
+import tempfile
+from pathlib import Path
 
-files = [p for p in IMG_DIR.glob(r'*') if p.suffix in ('.jpg','.png') ]
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
-ci = Interrogator(Config(clip_model_name="ViT-L-14/openai"))
+app = FastAPI(
+    title="Image to Text Service",
+)
 
-results = {}
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:8080",
+]
 
-for file in files:
-    image = Image.open(file).convert('RGB')
-    image_text = ci.interrogate_fast(image)
-    results[file] = image_text
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_event():
+    ci = Interrogator(Config(clip_model_name="ViT-L-14/openai"))
+    app.state.interrogator = ci
+
+
+@app.get('/')
+def root():
+    return {'message': "we're up!"}
+
+
+@app.post('/')
+async def convert_image_to_text(file: UploadFile= File()):
+    file_suffix_is_img = (file.filename or "").split('.')[-1] in ('jpg','png')
+    if not file_suffix_is_img:
+        raise HTTPException(400, 'The file must be either a .jpg or .png file')
     
-print(results)
+    file_obj = file.file
+    try:
+        image = Image.open(file_obj).convert('RGB')
+        image_text = app.state.interrogator.interrogate_fast(image)
+        return {file.filename: image_text}
+    except:
+        log.exception('Exception while trying to run CLIP on an image')
+        raise HTTPException(500, 'An error occured while processing the file')
+        
+    
+    
+    
+
+    
+    
